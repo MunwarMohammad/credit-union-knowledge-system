@@ -1,0 +1,5 @@
+hackathon-knowledge-kit-participant/
+__pycache__/
+results/
+*.zip
+.DS_Store
