@@ -3,3 +3,16 @@ __pycache__/
 results/
 *.zip
 .DS_Store
+
+# Website captures, including copies extracted outside the participant kit
+snapshots/
+snapshots_zip/
+
+# Local credentials
+.env
+.env.*
+.envrc
+*.pem
+*.key
+credentials.json
+secrets.json
