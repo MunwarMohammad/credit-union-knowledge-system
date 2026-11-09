@@ -20,3 +20,5 @@ python3 harness/run_eval.py --submission ../submission --eval eval/public_eval.j
 ~~~
 
 The submission folder contains the complete grader entry point, its dependencies and design notes. The queries run entirely from the supplied website captures.
+
+[Read the assessment review and public test results](docs/assessment-review.docx).
