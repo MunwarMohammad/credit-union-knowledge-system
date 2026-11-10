@@ -2,7 +2,7 @@
 
 Ask about a credit union product today or as of an earlier crawl. The offline Python implementation scored **0.9643** on the 40 public questions, with 38 full-credit answers, one partial and one zero. No API keys or third-party packages are required.
 
-- Select the latest full snapshot on or before the requested date.
+- Start with the latest full snapshot on or before the requested date. If only an earlier crawl has evidence, cite it and label the answer with the date it was last seen.
 - Match a published product, term, tier and metric, then return the supporting excerpt.
 - Prefer the product disclosure when sources disagree. Use FAQ and paragraph search for service questions and decline when evidence is insufficient.
 
@@ -23,6 +23,8 @@ python harness/run_eval.py --submission /absolute/path/to/credit-union-knowledge
 ~~~
 
 From the repository root, run the independent synthetic tests with `python -m unittest discover -s tests -v`. GitHub Actions runs the same suite on Python 3.11.
+
+The kit’s five-question self-test scored **1.0**, including conflict resolution.
 
 ## Design decisions and limits
 

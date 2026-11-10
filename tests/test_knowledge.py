@@ -111,3 +111,33 @@ class KnowledgeTests(unittest.TestCase):
         self.assertFalse(
             self.ks.answer("How do I download lunar statements?").confident
         )
+
+    def test_removed_fee_uses_latest_prior_evidence(self):
+        system = build()
+        for day, fee in [("2026-01-01", "$2"), ("2026-02-01", "$2.50")]:
+            system.ingest(edition(day, "2.12", [page("fees", "Lost debit card replacement fee: " + fee)]))
+        system.ingest(edition("2026-03-01", "2.12"))
+        answer = system.answer("How much is a lost debit card replacement?")
+        self.assertIn("$2.50", answer.text)
+        self.assertIn("Last seen on 2026-02-01", answer.text)
+        self.assertIn("2026-03-01", answer.conflict_note)
+        self.assertEqual("2026-02-01", answer.sources[0].snapshot_id)
+
+    def test_generic_business_deposit_categories(self):
+        table = "| Account Type | Balance Tier | APY |\n|---|---|---|\n"
+        table += "| Business 1st Rate Checking | $100+ | 1.00% |\n| Business Share Savings | $100+ | 0.50% |"
+        self.ks.ingest(edition("2026-10-01", "2.30", [page("business/checking-accounts", table)]))
+        for category, rate in [("checking", "1.00%"), ("savings", "0.50%")]:
+            answer = self.ks.answer("What is the business " + category + " APY?")
+            self.assertIn(rate, answer.text)
+            self.assertEqual(1, len(answer.sources))
+        self.assertTrue(self.ks.answer("Does Dupaco offer a 4.5% APY savings account?").text.startswith("No."))
+
+    def test_prior_certificate_rate_repeated_in_live_promo(self):
+        promo = page("promo", "Summer special: 6-month certificate APY 2.12% (offer ended)")
+        self.ks.ingest(edition("2026-10-01", "2.30", [promo]))
+        (conflict,) = self.ks.conflicts()
+        self.assertEqual("2.30%", conflict.resolution)
+        self.assertEqual({"2.12%", "2.30%"}, set(conflict.values))
+        self.assertIn(promo.url, [s.url for s in conflict.sources])
+        self.assertIn("2026-05-01", [s.snapshot_id for s in conflict.sources])

@@ -68,7 +68,7 @@ def extra_rows(page, sid):
 
 def equivalent(a, b):
     def precision(value):
-        return re.sub(r"\\d+(?:\\.\\d+)?", lambda m: str(float(m[0])), value)
+        return re.sub(r"\d+(?:\.\d+)?", lambda m: str(float(m[0])), value)
 
     return precision(a) == precision(b)
 
@@ -164,6 +164,7 @@ class Edition:
                         )
                         self.notes[key(official)] = reason
 
+        self.disputed_facts = {}
         self.disputes = list(self.overlaps.values())
         for fact, claims in sorted(self.claims.items()):
             winner = self.rows[fact[:3]]
@@ -178,6 +179,8 @@ class Edition:
                     continue
                 alternatives.setdefault(other_value, other.source)
             if alternatives:
+                topic = " ".join(filter(None, fact))
+                self.disputed_facts[topic] = fact
                 reason = (
                     "Latest dated organizational statement."
                     if fact[0] == "organization"
@@ -186,7 +189,7 @@ class Edition:
                 self.notes[fact[:3]] = reason
                 self.disputes.append(
                     Conflict(
-                        " ".join(filter(None, fact)),
+                        topic,
                         [*alternatives, value],
                         [*alternatives.values(), winner.source],
                         value,
@@ -251,7 +254,18 @@ class System:
                 "I don't know. There is no snapshot for that date or earlier.",
                 confident=False,
             )
-        ed = self.history[max(editions)]
+        selected = max(editions)
+        for day in sorted(editions, reverse=True):
+            answer = self._answer_in(self.history[day], q)
+            if answer.sources:
+                if day != selected:
+                    answer.text = f"Last seen on {day}: {answer.text}"
+                    note = f"The {selected} crawl does not verify this answer. The cited evidence is from {day}."
+                    answer.conflict_note = " ".join(filter(None, [note, answer.conflict_note]))
+                return answer
+        return answer
+
+    def _answer_in(self, ed, q):
         early = ed.evidence.answer(q)
         if early:
             return early
@@ -280,7 +294,32 @@ class System:
         """Report competing sources still present in the latest full crawl."""
         if not self.history:
             return []
-        return self.history[max(self.history)].disputes
+        dates = sorted(self.history, reverse=True)
+        latest = self.history[dates[0]]
+        result = []
+        for conflict in latest.disputes:
+            fact = latest.disputed_facts.get(conflict.topic)
+            earlier_sources = []
+            pending = set(conflict.values[:-1])
+            for day in dates[1:] if fact else ():
+                old = self.history[day].rows.get(fact[:3])
+                if not old or old.rank[0] < 2:
+                    continue
+                value = old.fields.get(fact[3], "")
+                matches = {v for v in pending if equivalent(v, value)}
+                if matches:
+                    earlier_sources.append(old.source)
+                    pending -= matches
+                if not pending:
+                    break
+            if earlier_sources:
+                conflict = Conflict(
+                    conflict.topic, conflict.values, [*conflict.sources, *earlier_sources],
+                    conflict.resolution,
+                    conflict.reason + " Earlier disclosures also quote the competing value.",
+                )
+            result.append(conflict)
+        return result
 
 
 def normalize_question(question):
@@ -331,7 +370,7 @@ def render_rates(rows, q, family, notes):
             0,
             "Yes, within the listed tiers."
             if matches
-            else "No, within the listed tiers for " + rows[0].label + ".",
+            else "No. None of the listed tiers below pays that APY.",
         )
     note = next((notes[key(r)] for r in rows if key(r) in notes), None)
     return Answer("\n".join(lines), sources, conflict_note=note)

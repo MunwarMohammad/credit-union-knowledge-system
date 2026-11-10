@@ -29,7 +29,10 @@ def normal(text):
 
 
 def key(row):
-    return row.family, normal(row.label), normal(row.tier)
+    label = normal(row.label)
+    if row.family == "certificate":
+        label = re.sub(r"^(\d+)[ -]months?(?: certificate)?$", r"\1 month", label)
+    return row.family, label, normal(row.tier)
 
 
 def extract(page, sid, Source):
@@ -248,7 +251,12 @@ def deposit_name(q):
 def account_rows(rows, q, family):
     """Require named deposit products to exist before applying balance filters."""
     money = amounts(q)
-    name = deposit_name(q) if family == "deposit" else ""
+    # A quoted yield and the audience describe the query, not the product name.
+    naming_query = re.sub(r"\b\d+(?:\.\d+)?\s*%\s*(?:apy|yield|interest)?", " ", q)
+    name = deposit_name(naming_query) if family == "deposit" else ""
+    category = re.search(r"\b(savings|checking|money market)\b", q)
+    if category and name in {"business " + category[1], "personal " + category[1]}:
+        name = ""
     if name:
         rows = [
             r
@@ -290,7 +298,7 @@ def account_rows(rows, q, family):
     if family == "deposit" and "hsa" in q:
         rows = [r for r in rows if "health" in r.label.lower()]
     elif family == "deposit" and not name and not any(w in q for w in words):
-        rows = [r for r in rows if r.label.lower() == "share savings"]
+        rows = [r for r in rows if category and category[1] in r.label.lower()]
     if money:
 
         def within(tier):
