@@ -12,6 +12,9 @@ from evidence import Evidence, plain, published
 from rates import Row, PCT, choose, extract, family_for, key, model_years
 
 
+FEE_INTENT = re.compile(r"\b(?:fees?|charges?|costs?|replacement)\b")
+
+
 def terms(s):
     ignore = set(
         "a an the for in is on what how do does i my you can to of it me your dupaco much cost fee at are we with and".split()
@@ -199,9 +202,14 @@ class Edition:
 
     def lookup(self, q):
         query = terms(q)
-        pool = self.fees if re.search(r"fee|charge|cost|replacement", q) else self.faq
+        fee_question = FEE_INTENT.search(q)
+        if fee_question:
+            query -= {"fee", "charge", "cost"}
+        pool = self.fees if fee_question else self.faq
         scored = []
         for words, text, source in pool:
+            if fee_question and not query.issubset(words):
+                continue
             overlap = len(query & words)
             if (
                 overlap >= 2
@@ -288,7 +296,10 @@ class System:
             return render_rates(rows, q, family, ed.notes) if rows else unknown
         if re.search(r"\b(rate|apy|apr|hours|yield)\b", q):
             return unknown
-        return ed.lookup(q) or ed.paragraphs.lookup(q) or unknown
+        match = ed.lookup(q)
+        if match or FEE_INTENT.search(q):
+            return match or unknown
+        return ed.paragraphs.lookup(q) or unknown
 
     def conflicts(self):
         """Report competing sources still present in the latest full crawl."""

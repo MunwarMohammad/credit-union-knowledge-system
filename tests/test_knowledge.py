@@ -35,6 +35,17 @@ class KnowledgeTests(unittest.TestCase):
     def test_as_of_between_crawls(self):
         self.assertIn("2.12% APY", self.ks.answer("6 mo cert", "2026-08-31").text)
 
+    def test_fee_must_match_reason(self):
+        fees = page("fees", "Rush fee for debit card $50.00")
+        self.ks.ingest(edition("2026-10-01", "2.30", [fees]))
+        for question in ("lost debit card fee", "How much is a lost debit card fee?"):
+            answer = self.ks.answer(question)
+            self.assertFalse(answer.confident)
+            self.assertEqual([], answer.sources)
+        rush = self.ks.answer("How much is a rush debit card fee?")
+        self.assertTrue(rush.confident)
+        self.assertEqual(fees.markdown, rush.sources[0].quote)
+
     def test_no_future_evidence(self):
         self.assertFalse(self.ks.answer("6 mo cert", "2025-01-01").confident)
 
