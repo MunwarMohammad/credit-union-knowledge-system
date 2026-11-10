@@ -1,4 +1,5 @@
 """Extract qualified rates from Markdown tables and filter them by member intent."""
+
 import re
 from collections import namedtuple
 from urllib.parse import urlsplit
@@ -9,11 +10,22 @@ MONEY = re.compile(r"\$\s*([\d,]+(?:\.\d+)?)(k)?", re.I)
 
 
 def amounts(text):
-    return [float(n.replace(",", "")) * (1000 if k else 1) for n, k in MONEY.findall(text)]
+    return [
+        float(n.replace(",", "")) * (1000 if k else 1) for n, k in MONEY.findall(text)
+    ]
 
 
 def normal(text):
-    return re.sub(r"\s+", " ", text.lower().replace("–", "-").replace("—", "-").replace(",", "").replace(".00", "").strip())
+    return re.sub(
+        r"\s+",
+        " ",
+        text.lower()
+        .replace("–", "-")
+        .replace("—", "-")
+        .replace(",", "")
+        .replace(".00", "")
+        .strip(),
+    )
 
 
 def key(row):
@@ -37,11 +49,20 @@ def extract(page, sid, Source):
         if len(header) != len(cells) or not PCT.search(raw):
             continue
         label, tier, fields = cells[0], "", {}
-        if header[0] == "certificate" or (header[0] == "term" and "dividend rate" in header):
+        if header[0] == "certificate" or (
+            header[0] == "term" and "dividend rate" in header
+        ):
             family = "certificate"
         elif header[0] in ("balance tier", "balance"):
-            names = ("High-Yield Savings", "Health Savings Account", "Investor’s Choice", "Share Savings")
-            label = next((n for n in names if n.lower() in " ".join(context).lower()), "")
+            names = (
+                "High-Yield Savings",
+                "Health Savings Account",
+                "Investor’s Choice",
+                "Share Savings",
+            )
+            label = next(
+                (n for n in names if n.lower() in " ".join(context).lower()), ""
+            )
             if not label:
                 continue
             if label == "Investor’s Choice":
@@ -52,6 +73,8 @@ def extract(page, sid, Source):
         elif "points" in header and "apr" in header:
             family = "mortgage"
         elif "model year" in label.lower() and "term" in header:
+            if "recreational" in path:
+                continue
             family, tier = "auto loan", cells[1]
         elif header[0] == "product" and "home-equity" in path:
             family = "home equity"
@@ -64,21 +87,59 @@ def extract(page, sid, Source):
         for h, c in zip(header, cells):
             m = PCT.search(c)
             if m and h != "points":
-                metric = "APY" if "yield" in h or "apy" in h else "APR" if "apr" in h or "annual percentage rate" in h else "dividend rate" if "dividend" in h else "rate"
+                metric = (
+                    "APY"
+                    if "yield" in h or "apy" in h
+                    else "APR"
+                    if "apr" in h or "annual percentage rate" in h
+                    else "dividend rate"
+                    if "dividend" in h
+                    else "rate"
+                )
                 fields[metric] = m.group()
             elif "min." in h and "$" in c:
                 fields[h] = c
-        canonical = {"home equity": ("personal/loans/home-equity",), "certificate": ("personal/savings-account",), "mortgage": ("personal/loans/home-loans",),
-                     "auto loan": ("personal/loans/auto-motorcycle-loans",), "personal loan": ("personal/loans/personal-loans",),
-                     "card": ("business/credit-cards", "personal/credit-cards"), "deposit": ("personal/savings-account", "personal/checking-accounts", "business/savings-accounts", "business/checking-accounts")}
-        rank = 3 if path.strip("/") in canonical[family] else 2 if path.startswith(("/personal/", "/business/", "/rates/")) else 1
-        yield Row(family, label, tier, fields, Source(page.url, sid, raw), (rank, page.fetched_at))
+        canonical = {
+            "home equity": ("personal/loans/home-equity",),
+            "certificate": ("personal/savings-account",),
+            "mortgage": ("personal/loans/home-loans",),
+            "auto loan": ("personal/loans/auto-motorcycle-loans",),
+            "personal loan": ("personal/loans/personal-loans",),
+            "card": ("business/credit-cards", "personal/credit-cards"),
+            "deposit": (
+                "personal/savings-account",
+                "personal/checking-accounts",
+                "business/savings-accounts",
+                "business/checking-accounts",
+            ),
+        }
+        rank = (
+            3
+            if path.strip("/") in canonical[family]
+            else 2
+            if path.startswith(("/personal/", "/business/", "/rates/"))
+            else 1
+        )
+        yield Row(
+            family,
+            label,
+            tier,
+            fields,
+            Source(page.url, sid, raw),
+            (rank, page.fetched_at),
+        )
 
 
 def family_for(q):
-    for pattern, family in [("home equity|heloc", "home equity"), (r"\bcds?\b|certificate", "certificate"), (r"mortgage|home loan", "mortgage"),
-                            (r"\b(car|auto|vehicle|motorcycle)\b", "auto loan"), ("personal loan", "personal loan"),
-                            (r"credit card|visa", "card"), (r"saving|checking|money market|\bhsa\b", "deposit")]:
+    for pattern, family in [
+        ("home equity|heloc", "home equity"),
+        (r"\bcds?\b|certificate", "certificate"),
+        (r"mortgage|home loan", "mortgage"),
+        (r"\b(car|auto|vehicle|motorcycle)\b", "auto loan"),
+        ("personal loan", "personal loan"),
+        (r"credit card|visa", "card"),
+        (r"saving|checking|money market|\bhsa\b", "deposit"),
+    ]:
         if re.search(pattern, q):
             return family
 
@@ -96,15 +157,20 @@ def model_years(label):
 
 def choose(rows, q, family):
     q = q.replace("high yield", "high-yield").replace("first rate", "1st rate")
-    q = q.replace("investor’s choice", "money market").replace("investor's choice", "money market")
     rows = [r for r in rows if r.family == family and r.rank[0] >= 2]
-    if re.search(r"intro|balance.transfer|cash advance|foreign transaction|annual fee", q):
+    if re.search(
+        r"intro|balance.transfer|cash advance|foreign transaction|annual fee", q
+    ):
         return []
     if re.search(r"business|commercial", q) and family not in ("deposit", "card"):
         return []
     if family == "certificate":
         retirement = bool(re.search(r"\bira\b|roth|traditional|retirement", q))
-        rows = [r for r in rows if ("retirement" in r.source.url or "ira" in r.label.lower()) == retirement]
+        rows = [
+            r
+            for r in rows
+            if ("retirement" in r.source.url or "ira" in r.label.lower()) == retirement
+        ]
         for qualifier in ("roth", "traditional"):
             if qualifier in q:
                 rows = [r for r in rows if qualifier in r.label.lower()]
@@ -121,7 +187,7 @@ def choose(rows, q, family):
             number = number * 12 if in_years else number
             unit = r"(?:month|mo\b)"
         pattern = rf"\b{number}[- ]*{unit}"
-        rows = [r for r in rows if re.search(pattern, normal(r.label+" "+r.tier))]
+        rows = [r for r in rows if re.search(pattern, normal(r.label + " " + r.tier))]
     if family == "home equity":
         line = bool(re.search(r"line of credit|heloc", q))
         rows = [r for r in rows if ("heloc" in r.label.lower()) == line]
@@ -135,32 +201,107 @@ def choose(rows, q, family):
         years = re.findall(r"\b(?:19|20)\d\d\b", q)
         if years:
             year = int(years[0])
-            rows = [r for r in rows if model_years(r.label)[0] <= year <= model_years(r.label)[1]]
-    money = amounts(q)
+            rows = [
+                r
+                for r in rows
+                if model_years(r.label)[0] <= year <= model_years(r.label)[1]
+            ]
     if family == "mortgage":
-        purpose = "refinance" if "refi" in q else "purchase"
-        rows = [r for r in rows if purpose in r.label.lower()]
-        if re.search(r"adjustable|\barm\b|\d/\d|construction|fha|va loan|jumbo", q):
-            return []
-        rows.sort(key=lambda r: amounts(r.label) or [float("inf")])
-        if money:
-            rows = [r for r in rows if amounts(r.label) and amounts(r.label)[0] >= money[0]][:1]
+        return mortgage_rows(rows, q)
     if family in ("card", "deposit"):
-        if family == "deposit" or "business" in q or "personal" in q or "platinum" in q or "rewards" in q:
-            rows = [r for r in rows if ("business" in r.label.lower()) == ("business" in q)]
-        words = ("platinum", "rewards") if family == "card" else ("bright", "holiday", "health", "launchpad", "money market", "high-yield", "you name it", "free checking", "1st rate", "prime", "jump start", "achieve", "checking", "share savings")
-        for word in words:
-            if word in q:
-                rows = [r for r in rows if word in r.label.lower()]
-        if family == "deposit" and "hsa" in q:
-            rows = [r for r in rows if "health" in r.label.lower()]
-        elif family == "deposit" and not any(w in q for w in words):
-            rows = [r for r in rows if r.label.lower() == "share savings"]
-        if money:
-            def within(tier):
-                bounds = amounts(tier)
-                return bounds and bounds[0] <= money[0] and (len(bounds) == 1 or money[0] <= bounds[1])
-            rows = [r for r in rows if within(r.tier)]
-        if rows and re.search(r"highest|maximum|top|best", q):
-            rows = [max(rows, key=lambda r: float(r.fields.get("APY", "0%")[:-1]))]
+        return account_rows(rows, q, family)
+    return rows
+
+
+def mortgage_rows(rows, q):
+    """Select the smallest published purchase or refinance tier covering the amount."""
+    money = amounts(q)
+    purpose = "refinance" if "refi" in q else "purchase"
+    rows = [r for r in rows if purpose in r.label.lower()]
+    if re.search(r"adjustable|\barm\b|\d/\d|construction|fha|va loan|jumbo", q):
+        return []
+    rows.sort(key=lambda r: amounts(r.label) or [float("inf")])
+    if money:
+        rows = [
+            r for r in rows if amounts(r.label) and amounts(r.label)[0] >= money[0]
+        ][:1]
+
+    return rows
+
+
+def deposit_name(q):
+    """Extract the modifiers immediately preceding a deposit product noun."""
+    match = re.search(r"\b(savings|checking|money market)\b", q)
+    if not match:
+        return ""
+    boundary = set(
+        "a an the on in at from of for your our my their this any do does current rates rate interest highest maximum best have provide offer pays pay with is are dupaco general standard account accounts".split()
+    )
+    words = []
+    for word in reversed(re.findall(r"[\w'-]+", q[: match.start()])):
+        if word in boundary:
+            break
+        words.insert(0, word)
+    return " ".join(words + [match[1]]) if words else ""
+
+
+def account_rows(rows, q, family):
+    """Require named deposit products to exist before applying balance filters."""
+    money = amounts(q)
+    name = deposit_name(q) if family == "deposit" else ""
+    if name:
+        rows = [
+            r
+            for r in rows
+            if name == normal(r.label).removesuffix(" account")
+            or name == normal(r.label)
+        ]
+    if (
+        family == "deposit"
+        or "business" in q
+        or "personal" in q
+        or "platinum" in q
+        or "rewards" in q
+    ):
+        rows = [r for r in rows if ("business" in r.label.lower()) == ("business" in q)]
+    words = (
+        ("platinum", "rewards")
+        if family == "card"
+        else (
+            "bright",
+            "holiday",
+            "health",
+            "launchpad",
+            "money market",
+            "high-yield",
+            "you name it",
+            "free checking",
+            "1st rate",
+            "prime",
+            "jump start",
+            "achieve",
+            "checking",
+            "share savings",
+        )
+    )
+    for word in words:
+        if word in q:
+            rows = [r for r in rows if word in r.label.lower()]
+    if family == "deposit" and "hsa" in q:
+        rows = [r for r in rows if "health" in r.label.lower()]
+    elif family == "deposit" and not name and not any(w in q for w in words):
+        rows = [r for r in rows if r.label.lower() == "share savings"]
+    if money:
+
+        def within(tier):
+            bounds = amounts(tier)
+            return (
+                bounds
+                and bounds[0] <= money[0]
+                and (len(bounds) == 1 or money[0] <= bounds[1])
+            )
+
+        rows = [r for r in rows if within(r.tier)]
+    if rows and re.search(r"highest|maximum|top|best", q):
+        rows = [max(rows, key=lambda r: float(r.fields.get("APY", "0%")[:-1]))]
     return rows

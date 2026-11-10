@@ -1,4 +1,5 @@
 """Offline temporal knowledge system. Entry point for the participant harness."""
+
 import calendar
 import re
 from collections import defaultdict
@@ -6,13 +7,18 @@ from datetime import datetime
 from urllib.parse import urlsplit
 
 from contract import Answer, Conflict, Source
+from search import ParagraphIndex
 from evidence import Evidence, plain, published
 from rates import Row, PCT, choose, extract, family_for, key, model_years
 
 
 def terms(s):
-    ignore = set("a an the for in is on what how do does i my you can to of it me your dupaco much cost fee at are we with and".split())
-    return {w.rstrip("s") for w in re.findall(r"[a-z0-9]+", s.lower()) if w not in ignore}
+    ignore = set(
+        "a an the for in is on what how do does i my you can to of it me your dupaco much cost fee at are we with and".split()
+    )
+    return {
+        w.rstrip("s") for w in re.findall(r"[a-z0-9]+", s.lower()) if w not in ignore
+    }
 
 
 def extra_rows(page, sid):
@@ -25,26 +31,61 @@ def extra_rows(page, sid):
             if h:
                 card = h[1]
             if card and "carry a balance" in line and PCT.search(line):
-                yield Row("card", card, "", {"APR": "–".join(PCT.findall(line))}, source(line), (3, page.fetched_at))
+                yield Row(
+                    "card",
+                    card,
+                    "",
+                    {"APR": "–".join(PCT.findall(line))},
+                    source(line),
+                    (3, page.fetched_at),
+                )
                 card = ""
-    for m in re.finditer(r"(?im)^([^\n|]{0,45}?)(\d+)[- ]month (.{0,35}?certificate) (APY|dividend rate)[: ]+(\d+(?:\.\d+)?%)", page.markdown):
+    for m in re.finditer(
+        r"(?im)^([^\n|]{0,45}?)(\d+)[- ]month (.{0,35}?certificate) (APY|dividend rate)[: ]+(\d+(?:\.\d+)?%)",
+        page.markdown,
+    ):
         rank = 3 if "/rates/" in path else 1
-        yield Row("certificate", f"{m[2]} Month {m[3]}".strip(), "", {m[4].upper(): m[5]}, source(m[0]), (rank, page.fetched_at))
+        yield Row(
+            "certificate",
+            f"{m[2]} Month {m[3]}".strip(),
+            "",
+            {m[4].upper(): m[5]},
+            source(m[0]),
+            (rank, page.fetched_at),
+        )
     if "/newsroom/" in path:
         m = re.search(r"\b(\d+) branch office locations\b", page.markdown)
         if m and published(page):
-            yield Row("organization", "Branch office locations", "", {"count": m[1]}, source(m[0]), (2, published(page)))
+            yield Row(
+                "organization",
+                "Branch office locations",
+                "",
+                {"count": m[1]},
+                source(m[0]),
+                (2, published(page)),
+            )
+
+
+def equivalent(a, b):
+    def precision(value):
+        return re.sub(r"\\d+(?:\\.\\d+)?", lambda m: str(float(m[0])), value)
+
+    return precision(a) == precision(b)
 
 
 class Edition:
     def __init__(self, snapshot):
+        self.paragraphs = ParagraphIndex(snapshot)
         self.evidence = Evidence(snapshot)
         self.rows = {}
         self.claims = defaultdict(list)
         self.faq = []
         self.fees = []
         for p in snapshot.pages:
-            for row in (*extract(p, snapshot.snapshot_id, Source), *extra_rows(p, snapshot.snapshot_id)):
+            for row in (
+                *extract(p, snapshot.snapshot_id, Source),
+                *extra_rows(p, snapshot.snapshot_id),
+            ):
                 k = key(row)
                 if k not in self.rows or self.rows[k].rank < row.rank:
                     self.rows[k] = row
@@ -54,33 +95,104 @@ class Edition:
             path = urlsplit(p.url).path.lower()
             if "/newsroom/" in path or "/blog/" in path:
                 continue
-            for m in re.finditer(r"(?m)^#{2,6} ([^#\n]{6,160}\?)\s*\n\s*([^\n#!|][^\n]{12,650})(?=\n|$)", p.markdown):
-                self.faq.append((terms(plain(m[1])), plain(m[2]), Source(p.url, snapshot.snapshot_id, m[0])))
-            for m in re.finditer(r"(?m)^- \[([^\]\n]{5,160}\?)\]\([^\n)]+\)\s*\n\s*([^\n#!|\[-][^\n]{12,1000})(?=\n|$)", p.markdown):
-                self.faq.append((terms(m[1]), plain(m[2]), Source(p.url, snapshot.snapshot_id, m[0])))
+            for m in re.finditer(
+                r"(?m)^#{2,6} ([^#\n]{6,160}\?)\s*\n\s*([^\n#!|][^\n]{12,650})(?=\n|$)",
+                p.markdown,
+            ):
+                self.faq.append(
+                    (
+                        terms(plain(m[1])),
+                        plain(m[2]),
+                        Source(p.url, snapshot.snapshot_id, m[0]),
+                    )
+                )
+            for m in re.finditer(
+                r"(?m)^- \[([^\]\n]{5,160}\?)\]\([^\n)]+\)\s*\n\s*([^\n#!|\[-][^\n]{12,1000})(?=\n|$)",
+                p.markdown,
+            ):
+                self.faq.append(
+                    (
+                        terms(m[1]),
+                        plain(m[2]),
+                        Source(p.url, snapshot.snapshot_id, m[0]),
+                    )
+                )
             if "fee" in path:
                 for line in p.markdown.splitlines():
                     if "$" in line and len(line) < 180 and not line.startswith("|"):
-                        self.fees.append((terms(line.split("$")[0]), plain(line), Source(p.url, snapshot.snapshot_id, line)))
+                        self.fees.append(
+                            (
+                                terms(line.split("$")[0]),
+                                plain(line),
+                                Source(p.url, snapshot.snapshot_id, line),
+                            )
+                        )
         self.notes = {}
         self.overlaps = {}
         # Compare only model years that both tables explicitly cover.
-        autos = [r for r in self.rows.values() if r.family == "auto loan" and r.rank[0] == 3]
+        autos = [
+            r for r in self.rows.values() if r.family == "auto loan" and r.rank[0] == 3
+        ]
         for official in autos:
             low, high = model_years(official.label)
             for candidates in self.claims.values():
                 for value, other in candidates:
-                    if other.family != "auto loan" or other.tier != official.tier or other.rank[0] >= 3:
+                    if (
+                        other.family != "auto loan"
+                        or other.tier != official.tier
+                        or other.rank[0] >= 3
+                    ):
                         continue
                     start, end = model_years(other.label)
                     start, end = max(start, low), min(end, high)
                     apr = official.fields.get("APR")
-                    if start <= end and apr and value != apr and key(official) != key(other):
+                    if (
+                        start <= end
+                        and apr
+                        and value != apr
+                        and key(official) != key(other)
+                    ):
                         years = f"{start}–{end}" if start != end else str(start)
                         reason = "The auto-loan product table covers this model year and term. The secondary table quotes a different APR."
                         topic = f"Auto loan APR, {years} model year, {official.tier}"
-                        self.overlaps[topic, value, apr] = Conflict(topic, [value, apr], [other.source, official.source], apr, reason)
+                        self.overlaps[topic, value, apr] = Conflict(
+                            topic,
+                            [value, apr],
+                            [other.source, official.source],
+                            apr,
+                            reason,
+                        )
                         self.notes[key(official)] = reason
+
+        self.disputes = list(self.overlaps.values())
+        for fact, claims in sorted(self.claims.items()):
+            winner = self.rows[fact[:3]]
+            value = winner.fields.get(fact[3])
+            if value is None or winner.rank[0] < 2:
+                continue
+            alternatives = {}
+            for other_value, other in claims:
+                if other.source.url == winner.source.url or other.rank >= winner.rank:
+                    continue
+                if equivalent(other_value, value):
+                    continue
+                alternatives.setdefault(other_value, other.source)
+            if alternatives:
+                reason = (
+                    "Latest dated organizational statement."
+                    if fact[0] == "organization"
+                    else "The product disclosure outranks secondary pages in this crawl."
+                )
+                self.notes[fact[:3]] = reason
+                self.disputes.append(
+                    Conflict(
+                        " ".join(filter(None, fact)),
+                        [*alternatives, value],
+                        [*alternatives.values(), winner.source],
+                        value,
+                        reason,
+                    )
+                )
 
     def lookup(self, q):
         query = terms(q)
@@ -88,11 +200,19 @@ class Edition:
         scored = []
         for words, text, source in pool:
             overlap = len(query & words)
-            if overlap >= 2 and overlap >= len(query)*0.65 and overlap >= len(words)*0.55:
+            if (
+                overlap >= 2
+                and overlap >= len(query) * 0.65
+                and overlap >= len(words) * 0.55
+            ):
                 scored.append((overlap / len(query | words), text, source))
         if scored:
             scored.sort(key=lambda x: -x[0])
-            if len(scored) == 1 or scored[0][0] > scored[1][0] or scored[0][1] == scored[1][1]:
+            if (
+                len(scored) == 1
+                or scored[0][0] > scored[1][0]
+                or scored[0][1] == scored[1][1]
+            ):
                 return Answer(scored[0][1], [scored[0][2]])
 
 
@@ -100,7 +220,10 @@ def cutoff(question):
     m = re.search(r"\b(?:as of|back in|in|during|on)\s+(\d{4}-\d\d-\d\d)\b", question)
     if m:
         return m[1]
-    m = re.search(r"\b(?:as of|back in|in|during|on)\s+([a-z]+) (?:(\d{1,2}),? )?(\d{4})", question)
+    m = re.search(
+        r"\b(?:as of|back in|in|during|on)\s+([a-z]+) (?:(\d{1,2}),? )?(\d{4})",
+        question,
+    )
     if m:
         for fmt in ("%B", "%b"):
             try:
@@ -114,71 +237,104 @@ def cutoff(question):
 class System:
     def __init__(self):
         self.history = {}
-        self.records = defaultdict(dict)
 
     def ingest(self, snapshot):
-        ed = Edition(snapshot)
-        for k, candidates in ed.claims.items():
-            seen = self.records[k]
-            for value, row in candidates:
-                # Normalize precision for comparisons while retaining the exact display text.
-                signature = re.sub(r"\d+\.\d+", lambda m: str(float(m[0])).rstrip("0").rstrip("."), value)
-                seen[signature] = (value, row)
-            if len(seen) > 1:
-                ed.notes[k[:3]] = "The selected snapshot's product disclosure takes precedence over older observations and secondary pages."
-        self.history[snapshot.taken_on] = ed
+        """Build a complete edition without carrying deleted pages forward."""
+        self.history[snapshot.taken_on] = Edition(snapshot)
 
     def answer(self, question, as_of=None):
-        q = question.lower().replace("–", "-")
+        q = normalize_question(question)
         date = as_of or cutoff(q)
         editions = [day for day in self.history if date is None or day <= date]
         if not editions:
-            return Answer("I don't know. There is no snapshot for that date or earlier.", confident=False)
+            return Answer(
+                "I don't know. There is no snapshot for that date or earlier.",
+                confident=False,
+            )
         ed = self.history[max(editions)]
         early = ed.evidence.answer(q)
         if early:
             return early
-        unknown = Answer("I don't know. I couldn't verify that detail in the selected snapshot.", confident=False)
-        for word, n in {"six":6, "ten":10, "twelve":12, "seventeen":17, "thirty":30, "sixty":60}.items():
-            q = re.sub(r"\b"+word+r"(?=[ -](?:month|year))", str(n), q)
+        unknown = Answer(
+            "I don't know. I couldn't verify that detail in the selected snapshot.",
+            confident=False,
+        )
         family = family_for(q)
-        if family and (re.search(r"rate|interest|apr|apy|yield|earn|pay|dividend|minimum|how much|special", q)
-                       or family == "card" and "offer" in q):
+        if family and (
+            re.search(
+                r"rate|interest|apr|apy|yield|earn|pay|dividend|minimum|how much|special",
+                q,
+            )
+            or family == "certificate"
+            or re.search(r"\d+[- ]*year", q)
+            or family == "card"
+            and "offer" in q
+        ):
             rows = choose(ed.rows.values(), q, family)
-            if not rows:
-                return ed.lookup(q) or unknown
-            lines, sources = [], []
-            for r in rows:
-                fields = [f"{value} {metric}" if metric in ("APR", "APY", "rate", "dividend rate") else f"{metric} {value}" for metric, value in r.fields.items()]
-                lines.append(" ".join(filter(None, [r.label, r.tier])) + " — " + ", ".join(fields))
-                sources.append(r.source)
-            percent = re.search(r"(\d+\.\d+)%", q)
-            if family == "deposit" and percent and re.search("any|does|do |is there", q):
-                matches = [r for r in rows if r.fields.get("APY") and float(r.fields["APY"][:-1]) == float(percent[1])]
-                lines.insert(0, "Yes, within the listed tiers." if matches else "No, within the listed tiers for " + rows[0].label + ".")
-            note = next((ed.notes[key(r)] for r in rows if key(r) in ed.notes), None)
-            return Answer("\n".join(lines), sources, conflict_note=note)
-        return ed.lookup(q) or unknown
+            return render_rates(rows, q, family, ed.notes) if rows else unknown
+        if re.search(r"\b(rate|apy|apr|hours|yield)\b", q):
+            return unknown
+        return ed.lookup(q) or ed.paragraphs.lookup(q) or unknown
 
     def conflicts(self):
-        result = []
-        latest = self.history[max(self.history)] if self.history else None
-        for k, history in sorted(self.records.items()):
-            if len(history) < 2:
-                continue
-            winner = latest.rows.get(k[:3])
-            resolution = winner.fields.get(k[3]) if winner and winner.rank[0] >= 2 else None
-            values = [v for v, r in history.values()]
-            sources = [r.source for v, r in history.values()]
-            if resolution and winner.source not in sources:
-                sources.append(winner.source)
-            reason = ("Most recent dated organizational statement." if k[0] == "organization" else
-                      "The current product table for the same term, tier and measure supersedes older or secondary observations.")
-            result.append(Conflict(" ".join(filter(None, k)), values, sources, resolution,
-                                   reason if resolution else "No authoritative value for this tier in the newest snapshot."))
-        if latest:
-            result.extend(latest.overlaps.values())
-        return result
+        """Report competing sources still present in the latest full crawl."""
+        if not self.history:
+            return []
+        return self.history[max(self.history)].disputes
+
+
+def normalize_question(question):
+    q = question.lower().replace("–", "-").replace("’", "'")
+    for pattern, replacement in [
+        (r"\bmortage\b", "mortgage"),
+        (r"\bcerts?\b", "certificate"),
+        (r"\bmos?\b", "month"),
+        (r"\byrs?\b", "year"),
+    ]:
+        q = re.sub(pattern, replacement, q)
+    for word, n in {
+        "six": 6,
+        "ten": 10,
+        "twelve": 12,
+        "seventeen": 17,
+        "thirty": 30,
+        "sixty": 60,
+    }.items():
+        q = re.sub(r"\b" + word + r"(?=[ -](?:month|year))", str(n), q)
+    if re.fullmatch(r"\s*\d+[- ]*year[ ?]*", q):
+        q += " mortgage"
+    return q
+
+
+def render_rates(rows, q, family, notes):
+    """Keep the original labels beside the figures and cite each selected row."""
+    lines, sources = [], []
+    for r in rows:
+        fields = [
+            f"{value} {metric}"
+            if metric in ("APR", "APY", "rate", "dividend rate")
+            else f"{metric} {value}"
+            for metric, value in r.fields.items()
+        ]
+        lines.append(
+            " ".join(filter(None, [r.label, r.tier])) + " — " + ", ".join(fields)
+        )
+        sources.append(r.source)
+    percent = re.search(r"(\d+\.\d+)%", q)
+    if family == "deposit" and percent and re.search("any|does|do |is there", q):
+        matches = [
+            r
+            for r in rows
+            if r.fields.get("APY") and float(r.fields["APY"][:-1]) == float(percent[1])
+        ]
+        lines.insert(
+            0,
+            "Yes, within the listed tiers."
+            if matches
+            else "No, within the listed tiers for " + rows[0].label + ".",
+        )
+    note = next((notes[key(r)] for r in rows if key(r) in notes), None)
+    return Answer("\n".join(lines), sources, conflict_note=note)
 
 
 def build():

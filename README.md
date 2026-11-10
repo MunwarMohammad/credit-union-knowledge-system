@@ -1,24 +1,33 @@
 # Credit union snapshot knowledge system
 
-Place the extracted participant kit in this directory as hackathon-knowledge-kit-participant/. The kit and local evaluation outputs are excluded from version control. Use Python 3.11 or newer.
+Ask about a credit union product today or as of an earlier crawl. The offline Python implementation scored **0.9643** on the 40 public questions, with 38 full-credit answers, one partial and one zero. No API keys or third-party packages are required.
 
-Ask about the most recent crawl or specify an earlier date.
+- Select the latest full snapshot on or before the requested date.
+- Match a published product, term, tier and metric, then return the supporting excerpt.
+- Prefer the product disclosure when sources disagree. Use FAQ and paragraph search for service questions and decline when evidence is insufficient.
 
-~~~sh
-python3 ask.py "What is the APR for a 60-month auto loan on a 2025 vehicle?"
-python3 ask.py "What is the 10-month jumbo certificate APY?" --as-of 2026-05-31
-python3 ask.py --conflicts
-~~~
-
-Each command prints JSON with snapshot citations. Pass --kit PATH if the kit is elsewhere.
-
-Run the official public evaluation from the extracted kit.
+From this repository, with Python 3.11+ and the participant kit extracted elsewhere:
 
 ~~~sh
-cd hackathon-knowledge-kit-participant
-python3 harness/run_eval.py --submission ../submission --eval eval/public_eval.jsonl --out ../results
+python ask.py --kit /path/to/hackathon-knowledge-kit-participant "6 mo cert"
 ~~~
 
-The submission folder contains the complete grader entry point, its dependencies and design notes. The queries run entirely from the supplied website captures.
+Add `--as-of 2026-05-31` for a historical answer or replace the question with `--conflicts` for current disagreements. The participant kit is **not redistributed**. The harness unpacks the snapshot archives on first use.
 
-[Read the assessment review and public test results](docs/assessment-review.docx).
+## Run the assessment
+
+From the top directory of the **organizers’ kit**, point the harness at the submission folder in your fresh clone:
+
+~~~sh
+python harness/run_eval.py --submission /absolute/path/to/credit-union-knowledge-system/submission --eval eval/public_eval.jsonl
+~~~
+
+From the repository root, run the independent synthetic tests with `python -m unittest discover -s tests -v`. GitHub Actions runs the same suite on Python 3.11.
+
+## Design decisions and limits
+
+Each crawl is a separate index. An earlier price is useful for a historical question. The conflict report focuses on disagreements that coexist in the newest crawl. A named savings product must match a published label before the system quotes a tier. A bare year term such as “30 yr” is interpreted as a mortgage.
+
+Paragraph retrieval uses lexical matching and conservative thresholds. Unfamiliar aliases can produce a refusal. Some services still use patterns tied to the supplied website. The public score does not measure recall or precision against the private conflict key.
+
+[Assessment review](docs/assessment-review.md) · [Source authority and retrieval rules](submission/NOTES.md)
